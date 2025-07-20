@@ -4,16 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-iced = {version = "0.13.1", features = ["tokio", "debug", "image"]}
-reqwest = "0.12.22"
+iced = {version = "0.13.1", features = ["tokio","debug", "image"]}
 rodio = {version = "0.20.1", features = [ "symphonia-all" ]}
-stream-download = {version = "0.22.1", features = [  "reqwest-rustls",
-  "reqwest-middleware",
-  "process",
-  "async-read",
-  "registry",
-]}
-tokio = { version = "1", features = ["full"] }
+stream-download = "0.22.1"
+tokio = { version = "1", features = ["sync"] }
 tokio-util = "0.7.15"
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+

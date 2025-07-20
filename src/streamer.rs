@@ -1,4 +1,5 @@
 use std::num::NonZeroUsize;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use stream_download::http::HttpStream;
@@ -11,16 +12,20 @@ use tokio_util::sync::CancellationToken;
 
 use crate::Error;
 
-pub async fn play(url: String, token: CancellationToken) -> Result<(), Error> {
+pub async fn play(
+    url: String,
+    volume: Arc<RwLock<f32>>,
+    token: CancellationToken,
+) -> Result<(), Error> {
     let stream = HttpStream::<Client>::create(url.parse().unwrap())
         .await
         .unwrap();
 
     let bitrate: u64 = stream.header("Icy-Br").unwrap().parse().unwrap();
 
-    // buffer 5 seconds of audio
-    // bitrate (in kilobits) / bits per byte * bytes per kilobyte * 5 seconds
-    let prefetch_bytes = bitrate / 8 * 1024 * 5;
+    // buffer 2 seconds of audio
+    // bitrate (in kilobits) / bits per byte * bytes per kilobyte * 2 seconds
+    let prefetch_bytes = bitrate / 8 * 1024 * 2;
 
     let reader = match StreamDownload::from_stream(
         stream,
@@ -39,23 +44,20 @@ pub async fn play(url: String, token: CancellationToken) -> Result<(), Error> {
         Err(e) => Err(e.decode_error().await).unwrap(),
     };
 
-    let cloned_token = token.clone();
-
-    let sink_handle = tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let (_stream, handle) = rodio::OutputStream::try_default().unwrap();
         let sink = rodio::Sink::try_new(&handle).unwrap();
         sink.append(rodio::Decoder::new(reader).unwrap());
-        // in the future I can use an mpsc here but for now this is fine, and im
-        // not sure if loop{} is such a great idea, I'll come back to this when
-        // I understand async a bit better
         loop {
-            if cloned_token.is_cancelled() {
+            sink.set_volume(*volume.read().unwrap());
+            if token.is_cancelled() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
+        sink.stop();
     });
 
-    sink_handle.await.unwrap();
+    handle.await.unwrap();
     Ok(())
 }
