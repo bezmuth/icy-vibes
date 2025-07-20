@@ -1,18 +1,18 @@
 use std::sync::{Arc, RwLock};
 
-// https://crates.io/crates/radiobrowser
-// https://github.com/aschey/stream-download-rs
-// TODO
-// Figure out how to get main window id (so we dont cancel the token when closing settings or browser)
+// TODO:
 // Favicon rendering!
-use iced::Length::Fixed;
+// Error dialog when a stream fails (lets actually use that result)
+use iced::Length::{self, Fixed};
 use iced::widget::{
-    button, column, container, horizontal_space, row, scrollable, slider, text, text_input,
-    vertical_space,
+    button, column, container, horizontal_space, mouse_area, row, scrollable, slider, text,
+    text_input, vertical_space,
 };
-use iced::{Element, Font, Size, Subscription, Task, Theme, window};
+use iced::{Element, Size, Subscription, Task, Theme, window};
+use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
+mod saver;
 mod streamer;
 
 #[derive(Debug, Clone)]
@@ -21,16 +21,13 @@ pub enum Error {
 }
 
 fn main() -> iced::Result {
-    // switch this to a daemon so we can create the first window, get it's id
-    // and then detect when it is closed to kill the sink.
     iced::daemon("Radio", Radio::update, Radio::view)
-        .default_font(Font::MONOSPACE)
         .subscription(Radio::subscription)
-        .theme(Radio::theme)
+        .theme(|_, _| Theme::default())
         .run_with(Radio::new)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Station {
     name: String,
     url: String, // https://www.radio-browser.info/
@@ -59,6 +56,7 @@ enum Message {
     StationNameChanged(String),
     StationUrlChanged(String),
     AddNewStation,
+    DeleteStation(usize),
 }
 
 impl Radio {
@@ -70,16 +68,12 @@ impl Radio {
         });
         (
             Self {
-                stations: vec![
-                    Station {
-                        name: "BBC World Service".to_string(),
-                        url: "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service".to_string(),
-                    },
-                    Station {
-                        name: "24/7 LoFi".to_string(),
-                        url: "http://usa9.fastcast4u.com/proxy/jamz?mp=/1".to_string(),
-                    },
-                ],
+                stations: saver::load_stations(),
+                // "BBC World Service"
+                // "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service"
+                //
+                // "24/7 LoFi",
+                // "http://usa9.fastcast4u.com/proxy/jamz?mp=/1"
                 volume: Arc::new(RwLock::new(1.0)),
                 token: CancellationToken::new(),
                 main_window: first_id,
@@ -89,10 +83,6 @@ impl Radio {
             },
             open.map(Message::WindowOpened),
         )
-    }
-
-    fn theme(&self, _window: window::Id) -> Theme {
-        Theme::default()
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -105,7 +95,7 @@ impl Radio {
                     Message::Stopped,
                 )
             }
-            Message::Stopped(_) => Task::none(),
+            Message::Stopped(_result) => Task::none(),
             Message::Stop => {
                 self.token.cancel();
                 Task::none()
@@ -115,14 +105,14 @@ impl Radio {
                 Task::none()
             }
             Message::AddStationDialog => {
-                if self.dialog_window.is_none(){
+                if self.dialog_window.is_none() {
                     let (id, open) = window::open(window::Settings {
                         size: Size::new(400.0, 200.0),
                         position: window::Position::Centered,
                         ..window::Settings::default()
                     });
                     self.dialog_window = Some(id);
-                open.map(Message::WindowOpened)
+                    open.map(Message::WindowOpened)
                 } else {
                     Task::none()
                 }
@@ -134,10 +124,11 @@ impl Radio {
                 } else {
                     self.new_station_name = String::new();
                     self.new_station_url = String::new();
+                    self.dialog_window = None;
                     Task::none()
                 }
             }
-            Message::WindowOpened(_) => Task::none(),
+            Message::WindowOpened(_id) => Task::none(),
             Message::StationNameChanged(name) => {
                 self.new_station_name = name;
                 Task::none()
@@ -147,13 +138,23 @@ impl Radio {
                 Task::none()
             }
             Message::AddNewStation => {
-                self.stations.push(Station {
-                    name: self.new_station_name.clone(),
-                    url: self.new_station_url.clone(),
-                });
-                let window_close = window::close(self.dialog_window.unwrap()); // we know that if this is fired the window exists so an unwrap is fine
-                self.dialog_window = None;
-                window_close
+                if (self.new_station_name == "") | (self.new_station_url == "") {
+                    Task::none()
+                } else {
+                    self.stations.push(Station {
+                        name: self.new_station_name.clone(),
+                        url: self.new_station_url.clone(),
+                    });
+                    let window_close = window::close(self.dialog_window.unwrap()); // we know that if this is fired the window exists so an unwrap is fine
+                    self.dialog_window = None;
+                    saver::save_stations(self.stations.clone()).unwrap();
+                    window_close
+                }
+            }
+            Message::DeleteStation(index) => {
+                self.stations.remove(index);
+                saver::save_stations(self.stations.clone()).unwrap();
+                Task::none()
             }
         }
     }
@@ -164,23 +165,30 @@ impl Radio {
 
     fn view(&self, window_id: window::Id) -> Element<Message> {
         if window_id == self.main_window {
+            // the radio playing interface
             let radio_interface = column![
                 station_list_element(self.stations.clone()),
                 global_controls(self.volume.clone())
             ];
 
             radio_interface.into()
-        } else {
+        } else if let Some(dialog_id) = self.dialog_window
+            && dialog_id == window_id
+        {
+            // Station adding interface
             column![
                 text("Station Name:"),
                 text_input("", &self.new_station_name).on_input(Message::StationNameChanged),
                 text("Station Url:"),
                 text_input("", &self.new_station_url).on_input(Message::StationUrlChanged),
+                vertical_space(),
                 button("Add").on_press(Message::AddNewStation),
             ]
             .spacing(5)
             .padding(5)
             .into()
+        } else {
+            horizontal_space().into()
         }
     }
 }
@@ -210,23 +218,35 @@ fn global_controls<'a>(volume: Arc<RwLock<f32>>) -> Element<'a, Message> {
 }
 
 fn station_list_element<'a>(stations: Vec<Station>) -> Element<'a, Message> {
-    let mut station_list = column![];
-    station_list = station_list
-        .extend(stations.into_iter().map(|station| station_element(station)))
-        .padding(5)
-        .spacing(5);
+    if stations.is_empty() {
+        container(text("Please add some stations"))
+            .center(Length::Fill)
+            .into()
+    } else {
+        let mut station_list = column![];
+        station_list = station_list
+            .extend(stations.into_iter().enumerate().map(station_element))
+            .padding(5)
+            .spacing(5);
 
-    let station_scrollable = scrollable(station_list);
-    column![station_scrollable, vertical_space()].into()
+        let station_scrollable = scrollable(station_list);
+        column![station_scrollable, vertical_space()].into()
+    }
 }
 
-fn station_element<'a>(station: Station) -> Element<'a, Message> {
-    container(row![
-        text(station.name),
-        horizontal_space(),
-        button("Play").on_press(Message::Play(station.url)),
-    ])
-    .padding(10)
-    .style(container::rounded_box)
+fn station_element<'a>(tup: (usize, Station)) -> Element<'a, Message> {
+    let (index, station) = tup;
+    mouse_area(
+        container(row![
+            text(station.name),
+            horizontal_space(),
+            button("Delete")
+                .style(button::danger)
+                .on_press(Message::DeleteStation(index))
+        ])
+        .padding(10)
+        .style(container::rounded_box),
+    )
+    .on_press(Message::Play(station.url))
     .into()
 }

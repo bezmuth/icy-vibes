@@ -41,7 +41,7 @@ pub async fn play(
     .await
     {
         Ok(reader) => reader,
-        Err(e) => Err(e.decode_error().await).unwrap(),
+        Err(e) => panic!("{:?}", e.decode_error().await),
     };
 
     let handle = tokio::spawn(async move {
