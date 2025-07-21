@@ -24,7 +24,7 @@ pub enum Error {
 }
 
 fn main() -> iced::Result {
-    iced::daemon("Radio", Radio::update, Radio::view)
+    iced::daemon("IcyVibes", Radio::update, Radio::view)
         .subscription(Radio::subscription)
         .theme(|_, _| Theme::Dark)
         .font(include_bytes!("../fonts/icons.ttf").as_slice())
