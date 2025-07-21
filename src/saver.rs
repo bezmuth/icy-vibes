@@ -6,7 +6,7 @@ use std::io::prelude::*;
 use serde_json;
 
 fn get_data_dir() -> String {
-   format!(
+    format!(
         "{}/.local/share/{}",
         env::home_dir()
             .unwrap()
@@ -25,13 +25,12 @@ pub fn save_stations(stations: Vec<crate::Station>) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn load_stations() -> Vec<crate::Station>{
-    if let Ok(mut data_file) = File::open(format!("{}/stations.json", get_data_dir())){
+pub fn load_stations() -> Vec<crate::Station> {
+    if let Ok(mut data_file) = File::open(format!("{}/stations.json", get_data_dir())) {
         let mut data = String::new();
         data_file.read_to_string(&mut data).unwrap();
         serde_json::from_str(&data).unwrap()
     } else {
         Vec::new()
     }
-
 }

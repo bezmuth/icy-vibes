@@ -1,15 +1,18 @@
-use std::sync::{Arc, RwLock};
-
 // TODO:
 // Favicon rendering!
 // Error dialog when a stream fails (lets actually use that result)
-use iced::Length::{self, Fixed};
-use iced::widget::{
-    button, column, container, horizontal_space, mouse_area, row, scrollable, slider, text,
-    text_input, vertical_space,
+// Station browser from radio-browser?
+use iced::{
+    Alignment::Center,
+    Element, Font, Length, Size, Subscription, Task, Theme,
+    widget::{
+        button, column, container, horizontal_space, mouse_area, row, scrollable, slider, text,
+        text_input, vertical_space,
+    },
+    window,
 };
-use iced::{Element, Size, Subscription, Task, Theme, window};
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, RwLock};
 use tokio_util::sync::CancellationToken;
 
 mod saver;
@@ -23,7 +26,8 @@ pub enum Error {
 fn main() -> iced::Result {
     iced::daemon("Radio", Radio::update, Radio::view)
         .subscription(Radio::subscription)
-        .theme(|_, _| Theme::default())
+        .theme(|_, _| Theme::Dark)
+        .font(include_bytes!("../fonts/icons.ttf").as_slice())
         .run_with(Radio::new)
 }
 
@@ -42,6 +46,7 @@ struct Radio {
     dialog_window: Option<window::Id>,
     new_station_name: String,
     new_station_url: String,
+    editing: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -57,29 +62,26 @@ enum Message {
     StationUrlChanged(String),
     AddNewStation,
     DeleteStation(usize),
+    ToggleEdit,
 }
 
 impl Radio {
     fn new() -> (Self, Task<Message>) {
         let (first_id, open) = window::open(window::Settings {
-            size: Size::new(400.0, 400.0),
+            size: Size::new(430.0, 400.0),
             position: window::Position::Centered,
             ..window::Settings::default()
         });
         (
             Self {
                 stations: saver::load_stations(),
-                // "BBC World Service"
-                // "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service"
-                //
-                // "24/7 LoFi",
-                // "http://usa9.fastcast4u.com/proxy/jamz?mp=/1"
                 volume: Arc::new(RwLock::new(1.0)),
                 token: CancellationToken::new(),
                 main_window: first_id,
                 new_station_name: String::new(),
                 new_station_url: String::new(),
                 dialog_window: None,
+                editing: false,
             },
             open.map(Message::WindowOpened),
         )
@@ -107,7 +109,8 @@ impl Radio {
             Message::AddStationDialog => {
                 if self.dialog_window.is_none() {
                     let (id, open) = window::open(window::Settings {
-                        size: Size::new(400.0, 200.0),
+                        size: Size::new(400.0, 170.0),
+                        resizable: false,
                         position: window::Position::Centered,
                         ..window::Settings::default()
                     });
@@ -156,6 +159,10 @@ impl Radio {
                 saver::save_stations(self.stations.clone()).unwrap();
                 Task::none()
             }
+            Message::ToggleEdit => {
+                self.editing = !self.editing;
+                Task::none()
+            }
         }
     }
 
@@ -167,8 +174,8 @@ impl Radio {
         if window_id == self.main_window {
             // the radio playing interface
             let radio_interface = column![
-                station_list_element(self.stations.clone()),
-                global_controls(self.volume.clone())
+                station_list_element(self.stations.clone(), self.editing),
+                global_controls(self.volume.clone(), self.editing)
             ];
 
             radio_interface.into()
@@ -193,39 +200,63 @@ impl Radio {
     }
 }
 
-fn global_controls<'a>(volume: Arc<RwLock<f32>>) -> Element<'a, Message> {
+fn global_controls<'a>(volume: Arc<RwLock<f32>>, editing: bool) -> Element<'a, Message> {
     let global_controls = container(
         row![
-            button("Stop").on_press(Message::Stop),
-            container(slider(
-                0.0..=100.0,
-                *volume.read().unwrap() * 100.0,
-                Message::VolumeChanged
-            ))
-            .center_y(Fixed(32.0))
+            button(stop_icon()).on_press(Message::Stop),
+            row![
+                volume_icon(),
+                slider(
+                    0.0..=100.0,
+                    *volume.read().unwrap() * 100.0,
+                    Message::VolumeChanged
+                )
+            ]
+            .spacing(5)
+            .align_y(Center)
             .width(150.0),
             horizontal_space(),
-            button("Add").on_press(Message::AddStationDialog),
+            if editing {
+                row![
+                    button(add_icon()).on_press(Message::AddStationDialog),
+                    button(done_icon()).on_press(Message::ToggleEdit),
+                ]
+                .spacing(5)
+            } else {
+                row![button(edit_icon()).on_press(Message::ToggleEdit)]
+            }
         ]
+        .align_y(Center)
         .spacing(5),
     )
     .style(container::rounded_box)
     .width(iced::Length::Fill)
-    .height(Fixed(54.0))
     .padding(10);
 
     global_controls.into()
 }
 
-fn station_list_element<'a>(stations: Vec<Station>) -> Element<'a, Message> {
+fn station_list_element<'a>(stations: Vec<Station>, editing: bool) -> Element<'a, Message> {
     if stations.is_empty() {
-        container(text("Please add some stations"))
-            .center(Length::Fill)
-            .into()
+        container(
+            row![
+                text("Please add a station: "),
+                button(add_icon()).on_press(Message::AddStationDialog)
+            ]
+            .spacing(5)
+            .align_y(Center),
+        )
+        .center(Length::Fill)
+        .into()
     } else {
         let mut station_list = column![];
         station_list = station_list
-            .extend(stations.into_iter().enumerate().map(station_element))
+            .extend(
+                stations
+                    .into_iter()
+                    .enumerate()
+                    .map(|x| station_element(x, editing)),
+            )
             .padding(5)
             .spacing(5);
 
@@ -234,19 +265,47 @@ fn station_list_element<'a>(stations: Vec<Station>) -> Element<'a, Message> {
     }
 }
 
-fn station_element<'a>(tup: (usize, Station)) -> Element<'a, Message> {
+fn station_element<'a>(tup: (usize, Station), editing: bool) -> Element<'a, Message> {
     let (index, station) = tup;
-    mouse_area(
-        container(row![
-            text(station.name),
-            horizontal_space(),
-            button("Delete")
+    let mut row_elements = row![text(station.name), horizontal_space()].align_y(Center);
+    row_elements = if editing {
+        row_elements.push(
+            button(delete_icon())
                 .style(button::danger)
-                .on_press(Message::DeleteStation(index))
-        ])
-        .padding(10)
-        .style(container::rounded_box),
+                .on_press(Message::DeleteStation(index)),
+        )
+    } else {
+        row_elements
+    };
+    mouse_area(
+        container(row_elements)
+            .padding(10)
+            .style(container::rounded_box),
     )
+    .interaction(iced::mouse::Interaction::Pointer)
     .on_press(Message::Play(station.url))
     .into()
+}
+
+fn stop_icon<'a, Message>() -> Element<'a, Message> {
+    icon('\u{E800}')
+}
+fn edit_icon<'a, Message>() -> Element<'a, Message> {
+    icon('\u{E802}')
+}
+fn done_icon<'a, Message>() -> Element<'a, Message> {
+    icon('\u{E804}')
+}
+fn delete_icon<'a, Message>() -> Element<'a, Message> {
+    icon('\u{E801}')
+}
+fn add_icon<'a, Message>() -> Element<'a, Message> {
+    icon('\u{E803}')
+}
+fn volume_icon<'a, Message>() -> Element<'a, Message> {
+    icon('\u{E805}')
+}
+fn icon<'a, Message>(codepoint: char) -> Element<'a, Message> {
+    const ICON_FONT: Font = Font::with_name("icons");
+    text(codepoint).font(ICON_FONT).into()
 }
