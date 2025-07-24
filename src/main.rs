@@ -141,7 +141,7 @@ impl Radio {
                 Task::none()
             }
             Message::AddNewStation => {
-                if (self.new_station_name == "") | (self.new_station_url == "") {
+                if self.new_station_name.is_empty() | self.new_station_url.is_empty() {
                     Task::none()
                 } else {
                     self.stations.push(Station {
@@ -249,34 +249,29 @@ fn station_list_element<'a>(stations: Vec<Station>, editing: bool) -> Element<'a
         .center(Length::Fill)
         .into()
     } else {
-        let mut station_list = column![];
-        station_list = station_list
-            .extend(
-                stations
-                    .into_iter()
-                    .enumerate()
-                    .map(|x| station_element(x, editing)),
-            )
-            .padding(5)
-            .spacing(5);
+        let station_list = column(
+            stations
+                .into_iter()
+                .enumerate()
+                .map(|(index, station)| station_element(index, station, editing)),
+        )
+        .padding(5)
+        .spacing(5);
 
         let station_scrollable = scrollable(station_list);
         column![station_scrollable, vertical_space()].into()
     }
 }
 
-fn station_element<'a>(tup: (usize, Station), editing: bool) -> Element<'a, Message> {
-    let (index, station) = tup;
+fn station_element<'a>(index: usize, station: Station, editing: bool) -> Element<'a, Message> {
     let mut row_elements = row![text(station.name), horizontal_space()].align_y(Center);
-    row_elements = if editing {
-        row_elements.push(
+    if editing {
+        row_elements = row_elements.push(
             button(delete_icon())
                 .style(button::danger)
                 .on_press(Message::DeleteStation(index)),
-        )
-    } else {
-        row_elements
-    };
+        );
+    }
     mouse_area(
         container(row_elements)
             .padding(10)
